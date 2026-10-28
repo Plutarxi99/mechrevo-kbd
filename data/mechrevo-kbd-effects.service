@@ -1,0 +1,11 @@
+[Unit]
+Description=Keyboard backlight effects (mechrevo_kbd)
+After=kbd-color-restore.service
+
+[Service]
+ExecStart=/usr/local/bin/mechrevo-kbd-effects
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

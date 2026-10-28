@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Keyboard backlight control for mechrevo_kbd.
+#   kbd-color                      show color, brightness and effect
+#   kbd-color ff0000               set color (hex)
+#   kbd-color 255 0 0              set color (decimal 0-255)
+#   kbd-color red|green|blue|white|cyan|magenta|yellow|orange|purple
+#   kbd-color -b 0..4              set brightness (0 = off)
+#   kbd-color effect MODE [1-10]   static|breathing|blink|cycle|rainbow, optional speed
+#   kbd-color --restore            apply the last saved color and brightness (used at login)
+set -euo pipefail
+
+CONFIG=${XDG_CONFIG_HOME:-$HOME/.config}/kbd-color
+STATE=$CONFIG/state
+EFFECT=$CONFIG/effect
+EFFECTS_UNIT=mechrevo-kbd-effects.service
+
+LED=/sys/class/leds/mechrevo_kbd:rgb:kbd_backlight
+[[ -d $LED ]] || LED=$(ls -d /sys/class/leds/*kbd_backlight 2>/dev/null | head -1 || true)
+[[ -n $LED && -d $LED ]] || { echo "keyboard backlight not found: is the mechrevo_kbd module loaded?" >&2; exit 1; }
+
+write() { # file value
+	if [[ -w $LED/$1 ]]; then echo "$2" > "$LED/$1"; else echo "$2" | sudo tee "$LED/$1" > /dev/null; fi
+}
+
+saved_rgb() {
+	if [[ -f $STATE ]]; then head -1 "$STATE"; else cat "$LED/multi_intensity"; fi
+}
+
+save() { # rgb level
+	mkdir -p "$CONFIG"
+	printf '%s\n%s\n' "$1" "$2" > "$STATE"
+}
+
+case ${1:-} in
+--restore)
+	[[ -f $STATE ]] || exit 0
+	{ read -r rgb; read -r level; } < "$STATE"
+	write multi_intensity "$rgb"
+	write brightness "$level"
+	exit 0 ;;
+"")
+	# While an effect runs, sysfs shows the current frame, so report the saved base color
+	echo "color:      $(saved_rgb)"
+	echo "brightness: $(cat "$LED/brightness")/$(cat "$LED/max_brightness")"
+	if systemctl --user -q is-active "$EFFECTS_UNIT" 2> /dev/null && [[ -f $EFFECT ]]; then
+		echo "effect:     $(cat "$EFFECT")"
+	else
+		echo "effect:     static"
+	fi
+	exit 0 ;;
+-b)
+	write brightness "${2:?brightness 0..$(cat "$LED/max_brightness")}"
+	save "$(saved_rgb)" "$2"
+	exit 0 ;;
+effect)
+	mode=${2:?mode: static breathing blink cycle rainbow}
+	case $mode in static|breathing|blink|cycle|rainbow) ;; *) echo "unknown effect: $mode" >&2; exit 1 ;; esac
+	speed=${3:-5}
+	mkdir -p "$CONFIG"
+	echo "$mode $speed" > "$EFFECT"
+	if [[ $mode == static ]]; then
+		systemctl --user disable --now "$EFFECTS_UNIT" 2> /dev/null || true
+	else
+		systemctl --user enable --now "$EFFECTS_UNIT"
+	fi
+	exit 0 ;;
+esac
+
+case $1 in
+	red) rgb="255 0 0" ;; green) rgb="0 255 0" ;; blue) rgb="0 0 255" ;;
+	white) rgb="255 255 255" ;; cyan) rgb="0 255 255" ;; magenta) rgb="255 0 255" ;;
+	yellow) rgb="255 255 0" ;; orange) rgb="255 80 0" ;; purple) rgb="128 0 255" ;;
+	*)
+		if [[ $# -eq 3 ]]; then
+			rgb="$1 $2 $3"
+		elif [[ $1 =~ ^#?([0-9a-fA-F]{6})$ ]]; then
+			h=${BASH_REMATCH[1]}
+			rgb="$((16#${h:0:2})) $((16#${h:2:2})) $((16#${h:4:2}))"
+		else
+			echo "unknown color: $*" >&2; exit 1
+		fi ;;
+esac
+
+write multi_intensity "$rgb"
+# multi_intensity alone re-applies the current brightness; make sure it is visible
+[[ $(cat "$LED/brightness") -gt 0 ]] || write brightness "$(cat "$LED/max_brightness")"
+save "$rgb" "$(cat "$LED/brightness")"

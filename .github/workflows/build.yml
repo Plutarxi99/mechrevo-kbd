@@ -1,0 +1,27 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  module:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kernel headers
+        run: sudo apt-get update && sudo apt-get install -y linux-headers-$(uname -r)
+      - name: Build the module against the runner's kernel
+        run: make KVER=$(uname -r)
+      - run: modinfo ./mechrevo_kbd.ko
+
+  scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: |
+          for f in kbd-color install.sh uninstall.sh; do bash -n "$f"; done
+          shellcheck -S warning kbd-color install.sh uninstall.sh
+      - name: Python syntax
+        run: python3 -m py_compile gui/mechrevo-kbd-gui mechrevo-kbd-effects

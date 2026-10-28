@@ -1,0 +1,3 @@
+# Let desktop users change keyboard backlight color, brightness and effects without root
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="mechrevo_kbd:*", RUN+="/bin/chmod 666 /sys%p/brightness /sys%p/multi_intensity"
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="mechrevo_kbd", RUN+="/bin/chmod 666 /sys%p/rainbow"

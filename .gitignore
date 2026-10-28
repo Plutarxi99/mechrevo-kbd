@@ -1,0 +1,15 @@
+# Build output
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+Module.symvers
+modules.order
+.tmp_versions/
+__pycache__/
+
+# Private signing keys and machine-specific setup, never publish
+keys/
+local-install.sh

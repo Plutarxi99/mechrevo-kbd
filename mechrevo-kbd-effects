@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+"""Keyboard backlight effects for mechrevo_kbd, run as a systemd user service.
+
+Reads the base color from ~/.config/kbd-color/state and the effect from
+~/.config/kbd-color/effect ("<mode> <speed>"), and picks up changes to both
+while running. Modes: static, breathing, blink, cycle, rainbow (done by the EC).
+"""
+
+import colorsys
+import glob
+import math
+import os
+import signal
+import sys
+import time
+
+CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "kbd-color")
+STATE = os.path.join(CONFIG, "state")
+EFFECT = os.path.join(CONFIG, "effect")
+LED_DEFAULT = "/sys/class/leds/mechrevo_kbd:rgb:kbd_backlight"
+MODES = ("static", "breathing", "blink", "cycle", "rainbow")
+EC_STEPS = 50
+STEP = -(-255 // EC_STEPS)  # smallest sysfs value that is still one EC step
+FPS = 20  # the kernel coalesces writes, so frames the EC can't keep up with are just dropped
+
+
+def find_led():
+    if os.path.isdir(LED_DEFAULT):
+        return LED_DEFAULT
+    found = sorted(glob.glob("/sys/class/leds/*:rgb:kbd_backlight"))
+    return found[0] if found else None
+
+
+def write(path, value):
+    with open(path, "w") as f:
+        f.write(value)
+
+
+def read_state():
+    try:
+        with open(STATE) as f:
+            rgb = tuple(int(v) for v in f.readline().split())
+        return rgb if len(rgb) == 3 else (255, 255, 255)
+    except (OSError, ValueError):
+        return (255, 255, 255)
+
+
+def read_effect():
+    try:
+        with open(EFFECT) as f:
+            parts = f.read().split()
+        mode = parts[0] if parts and parts[0] in MODES else "static"
+        speed = min(max(int(parts[1]), 1), 10) if len(parts) > 1 else 5
+        return mode, speed
+    except (OSError, ValueError):
+        return "static", 5
+
+
+def mtime(path):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def frame(mode, speed, rgb, t):
+    """Color for time t, or None when nothing needs to be drawn."""
+    period = 12.0 / speed  # speed 1..10 -> 12 s .. 1.2 s per cycle
+    phase = (t % period) / period
+    if mode == "breathing":
+        k = 0.05 + 0.95 * (1 - math.cos(2 * math.pi * phase)) / 2
+        return tuple(round(c * k) for c in rgb)
+    if mode == "blink":
+        return rgb if phase < 0.5 else tuple(round(c * 0.05) for c in rgb)
+    if mode == "cycle":
+        r, g, b = colorsys.hsv_to_rgb(phase, 1, 1)
+        return (round(r * 255), round(g * 255), round(b * 255))
+    return None
+
+
+def visible(color, base):
+    """The EC has 50 steps per channel and reads all-zero as "default color"
+    (the module turns that into dim white). Keep dark frames at the dimmest
+    step of the base hue instead."""
+    if any(c * EC_STEPS // 255 for c in color):
+        return color
+    return tuple(STEP if c else 0 for c in base) if any(base) else (STEP, STEP, STEP)
+
+
+def main():
+    led = find_led()
+    if not led:
+        print("mechrevo-kbd-effects: keyboard backlight not found", file=sys.stderr)
+        return 1
+    intensity = os.path.join(led, "multi_intensity")
+    rainbow = os.path.join(led, "device", "rainbow")
+
+    stop = False
+
+    def on_signal(*_):
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+
+    rgb = read_state()
+    mode, speed = read_effect()
+    seen = (mtime(STATE), mtime(EFFECT))
+    last = None
+    in_rainbow = False
+    start = time.monotonic()
+
+    while not stop:
+        now = (mtime(STATE), mtime(EFFECT))
+        if now != seen:
+            seen = now
+            rgb = read_state()
+            mode, speed = read_effect()
+            last = None
+
+        want_rainbow = mode == "rainbow" and os.path.exists(rainbow)
+        if want_rainbow != in_rainbow:
+            write(rainbow, "1" if want_rainbow else "0")
+            in_rainbow = want_rainbow
+            last = None
+
+        color = frame(mode, speed, rgb, time.monotonic() - start)
+        if color is None:
+            color = None if in_rainbow else rgb
+        if color is not None:
+            color = visible(color, rgb)
+            if color != last:
+                write(intensity, "%d %d %d" % color)
+                last = color
+
+        time.sleep(1 / FPS if color is not None and mode != "static" else 0.5)
+
+    # Leave the keyboard in the plain saved color
+    if in_rainbow:
+        write(rainbow, "0")
+    write(intensity, "%d %d %d" % read_state())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

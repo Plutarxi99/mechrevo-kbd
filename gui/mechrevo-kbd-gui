@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+"""GTK4/libadwaita control panel for the mechrevo_kbd keyboard backlight."""
+
+import colorsys
+import glob
+import locale
+import math
+import os
+import subprocess
+import sys
+import threading
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("Gsk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import Adw, Gdk, GLib, Graphene, Gsk, Gtk  # noqa: E402
+
+APP_ID = "io.github.plutarxi99.MechrevoKbd"
+LED_DEFAULT = "/sys/class/leds/mechrevo_kbd:rgb:kbd_backlight"
+CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+                      "kbd-color")
+STATE = os.path.join(CONFIG, "state")
+EFFECT = os.path.join(CONFIG, "effect")
+RESTORE_UNIT = "kbd-color-restore.service"
+EFFECTS_UNIT = "mechrevo-kbd-effects.service"
+POLL_MS = 2000
+
+# Same names as mechrevo-kbd-effects and `kbd-color effect`
+EFFECTS = [
+    ("static", "Static"), ("breathing", "Breathing"), ("blink", "Blink"),
+    ("cycle", "Color cycle"), ("rainbow", "Rainbow (hardware)"),
+]
+
+PRESETS = [
+    ("red", (255, 0, 0)), ("orange", (255, 80, 0)), ("yellow", (255, 255, 0)),
+    ("green", (0, 255, 0)), ("cyan", (0, 255, 255)), ("blue", (0, 0, 255)),
+    ("purple", (128, 0, 255)), ("magenta", (255, 0, 255)), ("white", (255, 255, 255)),
+]
+
+RU = {
+    "Keyboard Backlight": "Подсветка клавиатуры",
+    "Color": "Цвет",
+    "Custom color": "Свой цвет",
+    "Any color from the palette": "Любой цвет из палитры",
+    "Brightness": "Яркость",
+    "Off": "Выкл",
+    "Restore at login": "Восстанавливать при входе",
+    "Apply the last color and brightness after reboot": "Возвращать последний цвет и яркость после перезагрузки",
+    "Keyboard backlight not found": "Подсветка клавиатуры не найдена",
+    "The mechrevo_kbd kernel module is not loaded. Install it with install.sh "
+    "and reboot, or load it with “sudo modprobe mechrevo_kbd”.":
+        "Модуль ядра mechrevo_kbd не загружен. Установите его через install.sh и "
+        "перезагрузитесь или загрузите: «sudo modprobe mechrevo_kbd».",
+    "Retry": "Повторить",
+    "No write access to the backlight. Install the udev rule from install.sh.":
+        "Нет прав на запись. Установите udev-правило из install.sh.",
+    "red": "Красный", "orange": "Оранжевый", "yellow": "Жёлтый", "green": "Зелёный",
+    "cyan": "Бирюзовый", "blue": "Синий", "purple": "Фиолетовый", "magenta": "Пурпурный",
+    "white": "Белый",
+    "Effect": "Эффект",
+    "Mode": "Режим",
+    "Speed": "Скорость",
+    "Static": "Постоянный", "Breathing": "Дыхание", "Blink": "Мигание",
+    "Color cycle": "Переливание", "Rainbow (hardware)": "Радуга (аппаратная)",
+    "Pick a color on the wheel": "Выберите цвет на круге",
+    "Effects keep running in the background after the window is closed":
+        "Эффект продолжает работать после закрытия окна",
+}
+_ru = (locale.getlocale()[0] or os.environ.get("LANG", "")).startswith("ru")
+
+
+def _(text):
+    return RU.get(text, text) if _ru else text
+
+
+def find_led():
+    if os.path.isdir(LED_DEFAULT):
+        return LED_DEFAULT
+    found = sorted(glob.glob("/sys/class/leds/*:rgb:kbd_backlight"))
+    return found[0] if found else None
+
+
+class Backlight:
+    """sysfs access; writes go through one worker thread, only the latest request is applied."""
+
+    def __init__(self, path):
+        self.path = path
+        self.max_brightness = int(self._read("max_brightness"))
+        self._pending = None
+        self._cond = threading.Condition()
+        threading.Thread(target=self._worker, daemon=True).start()
+
+    def _read(self, name):
+        with open(os.path.join(self.path, name)) as f:
+            return f.read().strip()
+
+    def _write(self, name, value):
+        with open(os.path.join(self.path, name), "w") as f:
+            f.write(value)
+
+    def writable(self):
+        return all(os.access(os.path.join(self.path, n), os.W_OK)
+                   for n in ("brightness", "multi_intensity"))
+
+    def color(self):
+        return tuple(int(v) for v in self._read("multi_intensity").split())
+
+    def brightness(self):
+        return int(self._read("brightness"))
+
+    def apply(self, rgb, level, write_color=True):
+        with self._cond:
+            self._pending = (rgb, level, write_color)
+            self._cond.notify()
+
+    def _worker(self):
+        while True:
+            with self._cond:
+                while self._pending is None:
+                    self._cond.wait()
+                rgb, level, write_color = self._pending
+                self._pending = None
+            try:
+                # Each write costs a few EC round-trips, so they stay off the UI thread.
+                # While an effect runs, the effects service picks the color up from STATE.
+                if write_color:
+                    self._write("multi_intensity", "%d %d %d" % rgb)
+                self._write("brightness", str(level))
+                save_state(rgb, level)
+            except OSError as e:
+                print("mechrevo-kbd-gui: write failed:", e, file=sys.stderr)
+
+
+def save_state(rgb, level):
+    # Same format as the kbd-color CLI, so both can restore it
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, "w") as f:
+        f.write("%d %d %d\n%d\n" % (*rgb, level))
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            rgb = tuple(int(v) for v in f.readline().split())
+        return rgb if len(rgb) == 3 else None
+    except (OSError, ValueError):
+        return None
+
+
+def unit_enabled(unit):
+    r = subprocess.run(["systemctl", "--user", "is-enabled", unit],
+                       capture_output=True, text=True)
+    return r.stdout.strip() == "enabled"
+
+
+def load_effect():
+    """Active effect, or ("static", 5) when the effects service is off."""
+    try:
+        with open(EFFECT) as f:
+            parts = f.read().split()
+        mode, speed = parts[0], int(parts[1])
+    except (OSError, ValueError, IndexError):
+        return "static", 5
+    if mode not in dict(EFFECTS) or not unit_enabled(EFFECTS_UNIT):
+        return "static", speed
+    return mode, speed
+
+
+def effect_frame(mode, speed, rgb, t):
+    """Preview of mechrevo-kbd-effects' frame(); level multiplier for blink/breathing."""
+    period = 12.0 / speed
+    phase = (t % period) / period
+    if mode == "breathing":
+        return rgb, 0.05 + 0.95 * (1 - math.cos(2 * math.pi * phase)) / 2
+    if mode == "blink":
+        return rgb, 1.0 if phase < 0.5 else 0.05
+    if mode in ("cycle", "rainbow"):
+        r, g, b = colorsys.hsv_to_rgb(phase, 1, 1)
+        return (round(r * 255), round(g * 255), round(b * 255)), 1.0
+    return rgb, 1.0
+
+
+class ColorWheel(Gtk.Widget):
+    """Hue around the circle, saturation from the center out (value is always full,
+    brightness has its own control)."""
+
+    SIZE = 220
+
+    def __init__(self, on_change):
+        super().__init__()
+        self.on_change = on_change
+        self.hue, self.sat = 0.0, 0.0
+        drag = Gtk.GestureDrag()
+        drag.connect("drag-begin", self._on_begin)
+        drag.connect("drag-update", self._on_update)
+        self.add_controller(drag)
+        self._origin = (0, 0)
+
+    def set_rgb(self, rgb):
+        h, s, _v = colorsys.rgb_to_hsv(*(c / 255 for c in rgb))
+        self.hue, self.sat = h, s
+        self.queue_draw()
+
+    def rgb(self):
+        r, g, b = colorsys.hsv_to_rgb(self.hue, self.sat, 1)
+        return (round(r * 255), round(g * 255), round(b * 255))
+
+    def do_measure(self, _orientation, _for_size):
+        return self.SIZE, self.SIZE, -1, -1
+
+    def _geometry(self):
+        w, h = self.get_width(), self.get_height()
+        return w / 2, h / 2, min(w, h) / 2 - 6
+
+    def _pick(self, x, y):
+        cx, cy, r = self._geometry()
+        dx, dy = x - cx, y - cy
+        self.sat = min(math.hypot(dx, dy) / r, 1.0)
+        # 0 at the top, clockwise, matching the conic gradient
+        self.hue = (math.atan2(dx, -dy) / (2 * math.pi)) % 1.0
+        self.queue_draw()
+        self.on_change(self.rgb())
+
+    def _on_begin(self, _gesture, x, y):
+        self._origin = (x, y)
+        self._pick(x, y)
+
+    def _on_update(self, _gesture, dx, dy):
+        self._pick(self._origin[0] + dx, self._origin[1] + dy)
+
+    def do_snapshot(self, snap):
+        cx, cy, r = self._geometry()
+        bounds = Graphene.Rect().init(cx - r, cy - r, 2 * r, 2 * r)
+        center = Graphene.Point().init(cx, cy)
+        circle = Gsk.RoundedRect()
+        circle.init_from_rect(bounds, r)
+
+        snap.push_rounded_clip(circle)
+        hues = []
+        for i in range(7):
+            stop = Gsk.ColorStop()
+            stop.offset = i / 6
+            stop.color = rgba(*colorsys.hsv_to_rgb((i / 6) % 1.0, 1, 1))
+            hues.append(stop)
+        snap.append_conic_gradient(bounds, center, 0, hues)
+        white = []
+        for offset, alpha in ((0, 1), (1, 0)):
+            stop = Gsk.ColorStop()
+            stop.offset = offset
+            stop.color = rgba(1, 1, 1, alpha)
+            white.append(stop)
+        snap.append_radial_gradient(bounds, center, r, r, 0, 1, white)
+        snap.pop()
+
+        # Marker
+        mx = cx + self.sat * r * math.sin(2 * math.pi * self.hue)
+        my = cy - self.sat * r * math.cos(2 * math.pi * self.hue)
+        m = 9
+        marker = Gsk.RoundedRect()
+        marker.init_from_rect(Graphene.Rect().init(mx - m, my - m, 2 * m, 2 * m), m)
+        snap.push_rounded_clip(marker)
+        snap.append_color(rgba(*(c / 255 for c in self.rgb())), marker.bounds)
+        snap.pop()
+        snap.append_border(marker, [3] * 4, [rgba(1, 1, 1)] * 4)
+        outer = Gsk.RoundedRect()
+        outer.init_from_rect(Graphene.Rect().init(mx - m - 1, my - m - 1, 2 * m + 2, 2 * m + 2), m + 1)
+        snap.append_border(outer, [1] * 4, [rgba(0, 0, 0, 0.4)] * 4)
+
+
+class KeyboardPreview(Gtk.Widget):
+    """Stylized keyboard drawn with GtkSnapshot (no cairo dependency)."""
+
+    ROWS = (14, 14, 13, 12, 8)
+    HEIGHT = 150
+
+    def __init__(self):
+        super().__init__()
+        self.rgb = (255, 255, 255)
+        self.level = 1.0
+
+    def update(self, rgb, level):
+        self.rgb, self.level = rgb, level
+        self.queue_draw()
+
+    def do_measure(self, orientation, _for_size):
+        if orientation == Gtk.Orientation.VERTICAL:
+            return self.HEIGHT, self.HEIGHT, -1, -1
+        return 200, 400, -1, -1
+
+    def do_snapshot(self, snap):
+        width, height = self.get_width(), self.get_height()
+        pad, gap = 12, 4
+        rows = len(self.ROWS)
+        key_h = (height - 2 * pad - gap * (rows - 1)) / rows
+
+        self._rounded(snap, 0, 0, width, height, 14, rgba(0.12, 0.12, 0.14))
+
+        r, g, b = (c / 255 for c in self.rgb)
+        glow = 0.25 + 0.75 * self.level
+        for i, keys in enumerate(self.ROWS):
+            y = pad + i * (key_h + gap)
+            key_w = (width - 2 * pad - gap * (keys - 1)) / keys
+            for k in range(keys):
+                x = pad + k * (key_w + gap)
+                border = rgba(r, g, b, 0.85 * glow) if self.level > 0 else None
+                self._rounded(snap, x, y, key_w, key_h, 4, rgba(0.2, 0.2, 0.23), border)
+                if self.level > 0:
+                    # Legend glyph
+                    snap.append_color(rgba(r, g, b, glow), Graphene.Rect().init(
+                        x + key_w * 0.35, y + key_h * 0.42, key_w * 0.3, key_h * 0.16))
+
+    @staticmethod
+    def _rounded(snap, x, y, w, h, radius, fill, border=None):
+        rect = Graphene.Rect().init(x, y, w, h)
+        rounded = Gsk.RoundedRect()
+        rounded.init_from_rect(rect, radius)
+        snap.push_rounded_clip(rounded)
+        snap.append_color(fill, rect)
+        snap.pop()
+        if border:
+            snap.append_border(rounded, [1.5] * 4, [border] * 4)
+
+
+def rgba(r, g, b, a=1.0):
+    c = Gdk.RGBA()
+    c.red, c.green, c.blue, c.alpha = r, g, b, a
+    return c
+
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title=_("Keyboard Backlight"))
+        self.set_default_size(460, 860)
+        self.backlight = None
+        self.rgb = (255, 255, 255)
+        self.level = 0
+        self.effect, self.speed = "static", 5
+        self._syncing = False
+
+        self.toasts = Adw.ToastOverlay()
+        view = Adw.ToolbarView()
+        view.add_top_bar(Adw.HeaderBar())
+        view.set_content(self.toasts)
+        self.set_content(view)
+
+        self._load()
+        GLib.timeout_add(POLL_MS, self._poll)
+
+    # --- pages ---
+
+    def _load(self):
+        path = find_led()
+        if not path:
+            self.toasts.set_child(self._missing_page())
+            return
+        self.backlight = Backlight(path)
+        # sysfs holds the current effect frame, the saved state holds the base color
+        self.rgb = load_state() or self.backlight.color()
+        self.level = self.backlight.brightness()
+        self.effect, self.speed = load_effect()
+        self.effects = [e for e in EFFECTS
+                        if e[0] != "rainbow" or os.path.exists(os.path.join(path, "device", "rainbow"))]
+        self.toasts.set_child(self._main_page())
+        self._sync_widgets()
+        if not self.backlight.writable():
+            self.toasts.add_toast(Adw.Toast(
+                title=_("No write access to the backlight. Install the udev rule from install.sh."),
+                timeout=0))
+
+    def _missing_page(self):
+        retry = Gtk.Button(label=_("Retry"), halign=Gtk.Align.CENTER)
+        retry.add_css_class("pill")
+        retry.add_css_class("suggested-action")
+        retry.connect("clicked", lambda *_a: self._load())
+        return Adw.StatusPage(
+            icon_name="input-keyboard-symbolic",
+            title=_("Keyboard backlight not found"),
+            description=_("The mechrevo_kbd kernel module is not loaded. Install it with install.sh "
+                          "and reboot, or load it with “sudo modprobe mechrevo_kbd”."),
+            child=retry)
+
+    def _main_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24,
+                      margin_top=18, margin_bottom=24, margin_start=16, margin_end=16)
+
+        self.preview = KeyboardPreview()
+        self.preview.add_tick_callback(self._on_tick)
+        box.append(self.preview)
+
+        colors = Adw.PreferencesGroup(title=_("Color"))
+        self.wheel = ColorWheel(self._on_wheel)
+        self.wheel.set_halign(Gtk.Align.CENTER)
+        self.wheel.set_margin_top(16)
+        self.wheel.set_margin_bottom(16)
+        self.wheel.set_tooltip_text(_("Pick a color on the wheel"))
+        colors.add(Adw.PreferencesRow(activatable=False, child=self.wheel))
+
+        flow = Gtk.Box(homogeneous=True, spacing=4,
+                       margin_top=12, margin_bottom=12, margin_start=8, margin_end=8)
+        css = []
+        for name, rgb in PRESETS:
+            btn = Gtk.Button(tooltip_text=_(name), width_request=32, height_request=32,
+                             halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+            btn.add_css_class("circular")
+            btn.add_css_class("swatch-" + name)
+            btn.connect("clicked", self._on_preset, rgb)
+            flow.append(btn)
+            css.append(".swatch-%s { background: rgb(%d,%d,%d); min-width: 32px; min-height: 32px; padding: 0; "
+                       "border: 2px solid alpha(currentColor, 0.15); }" % (name, *rgb))
+        provider = Gtk.CssProvider()
+        provider.load_from_string("\n".join(css))
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        # Wrapped in a row so the swatches stay above "Custom color" in the same card
+        swatches = Adw.PreferencesRow(activatable=False, child=flow)
+        colors.add(swatches)
+
+        self.color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False),
+                                                  valign=Gtk.Align.CENTER)
+        self.color_button.connect("notify::rgba", self._on_custom_color)
+        custom = Adw.ActionRow(title=_("Custom color"), subtitle=_("Any color from the palette"))
+        custom.add_suffix(self.color_button)
+        custom.set_activatable_widget(self.color_button)
+        colors.add(custom)
+        box.append(colors)
+
+        bright = Adw.PreferencesGroup(title=_("Brightness"))
+        self.scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0,
+                                              self.backlight.max_brightness, 1)
+        self.scale.set_draw_value(False)
+        self.scale.set_hexpand(True)
+        self.scale.set_margin_top(6)
+        for i in range(self.backlight.max_brightness + 1):
+            self.scale.add_mark(i, Gtk.PositionType.BOTTOM, _("Off") if i == 0 else str(i))
+        self.scale.connect("value-changed", self._on_brightness)
+        bright.add(self.scale)
+        box.append(bright)
+
+        effects = Adw.PreferencesGroup(
+            title=_("Effect"),
+            description=_("Effects keep running in the background after the window is closed"))
+        self.effect_row = Adw.ComboRow(
+            title=_("Mode"), model=Gtk.StringList.new([_(label) for _id, label in self.effects]))
+        self.effect_row.set_selected(next(
+            (i for i, e in enumerate(self.effects) if e[0] == self.effect), 0))
+        self.effect_row.connect("notify::selected", self._on_effect)
+        effects.add(self.effect_row)
+
+        self.speed_scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 10, 1)
+        self.speed_scale.set_draw_value(False)
+        self.speed_scale.set_hexpand(True)
+        self.speed_scale.set_valign(Gtk.Align.CENTER)
+        self.speed_scale.set_value(self.speed)
+        self.speed_scale.connect("value-changed", self._on_speed)
+        self.speed_row = Adw.ActionRow(title=_("Speed"))
+        self.speed_row.add_suffix(self.speed_scale)
+        self.speed_row.set_sensitive(self.effect != "static")
+        effects.add(self.speed_row)
+        box.append(effects)
+
+        auto = Adw.PreferencesGroup()
+        self.restore_row = Adw.SwitchRow(
+            title=_("Restore at login"),
+            subtitle=_("Apply the last color and brightness after reboot"),
+            active=unit_enabled(RESTORE_UNIT))
+        self.restore_row.connect("notify::active", self._on_restore_toggled)
+        auto.add(self.restore_row)
+        box.append(auto)
+
+        clamp = Adw.Clamp(maximum_size=520, child=box)
+        return Gtk.ScrolledWindow(child=clamp, hscrollbar_policy=Gtk.PolicyType.NEVER)
+
+    # --- state ---
+
+    def _sync_widgets(self):
+        self._syncing = True
+        self.scale.set_value(self.level)
+        rgba = Gdk.RGBA()
+        rgba.parse("rgb(%d,%d,%d)" % self.rgb)
+        self.color_button.set_rgba(rgba)
+        self.wheel.set_rgb(self.rgb)
+        self.preview.update(self.rgb, self.level / self.backlight.max_brightness)
+        self._syncing = False
+
+    def _apply(self):
+        self.preview.update(self.rgb, self.level / self.backlight.max_brightness)
+        self.backlight.apply(self.rgb, self.level, write_color=self.effect == "static")
+
+    def _on_wheel(self, rgb):
+        self.rgb = rgb
+        self._syncing = True
+        rgba = Gdk.RGBA()
+        rgba.parse("rgb(%d,%d,%d)" % rgb)
+        self.color_button.set_rgba(rgba)
+        self._syncing = False
+        if self.level == 0:
+            self.level = self.backlight.max_brightness
+            self._sync_widgets()
+        self._apply()
+
+    def _on_effect(self, row, _pspec):
+        self.effect = self.effects[row.get_selected()][0]
+        self.speed_row.set_sensitive(self.effect != "static")
+        self._save_effect()
+
+    def _on_speed(self, scale):
+        speed = round(scale.get_value())
+        if speed != self.speed:
+            self.speed = speed
+            self._save_effect()
+
+    def _save_effect(self):
+        os.makedirs(CONFIG, exist_ok=True)
+        with open(EFFECT, "w") as f:
+            f.write("%s %d\n" % (self.effect, self.speed))
+        # The service reloads EFFECT on its own; only start/stop it here, without blocking the UI
+        action = "disable" if self.effect == "static" else "enable"
+        subprocess.Popen(["systemctl", "--user", action, "--now", EFFECTS_UNIT],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if self.effect == "static":
+            self.preview.update(self.rgb, self.level / self.backlight.max_brightness)
+
+    def _on_tick(self, widget, clock):
+        if self.backlight is None or self.effect == "static":
+            return GLib.SOURCE_CONTINUE
+        rgb, k = effect_frame(self.effect, self.speed, self.rgb, clock.get_frame_time() / 1e6)
+        widget.update(rgb, k * self.level / self.backlight.max_brightness)
+        return GLib.SOURCE_CONTINUE
+
+    def _on_preset(self, _btn, rgb):
+        self.rgb = rgb
+        if self.level == 0:
+            self.level = self.backlight.max_brightness
+        self._sync_widgets()
+        self._apply()
+
+    def _on_custom_color(self, button, _pspec):
+        if self._syncing:
+            return
+        c = button.get_rgba()
+        self.rgb = tuple(round(v * 255) for v in (c.red, c.green, c.blue))
+        if self.level == 0:
+            self.level = self.backlight.max_brightness
+            self._sync_widgets()
+        self._apply()
+
+    def _on_brightness(self, scale, *_a):
+        if self._syncing:
+            return
+        level = round(scale.get_value())
+        if level != self.level:
+            self.level = level
+            self._apply()
+
+    def _on_restore_toggled(self, row, _pspec):
+        action = "enable" if row.get_active() else "disable"
+        subprocess.run(["systemctl", "--user", action, RESTORE_UNIT], capture_output=True)
+
+    def _poll(self):
+        # Fn keys change brightness in the EC behind our back; follow them
+        if self.backlight is None:
+            return True
+        try:
+            level = self.backlight.brightness()
+        except OSError:
+            return True
+        if level != self.level:
+            self.level = level
+            self._sync_widgets()
+            save_state(self.rgb, self.level)
+        return True
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+
+    def do_activate(self):
+        win = self.get_active_window() or Window(self)
+        win.present()
+
+
+if __name__ == "__main__":
+    sys.exit(App().run(sys.argv))

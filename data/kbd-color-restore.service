@@ -1,0 +1,11 @@
+[Unit]
+Description=Restore keyboard backlight color (mechrevo_kbd)
+
+[Service]
+Type=oneshot
+# The LED shows up a little after login on some boots; wait up to 10 s for udev to open it up
+ExecStartPre=/bin/sh -c 'for i in $(seq 20); do [ -w /sys/class/leds/mechrevo_kbd:rgb:kbd_backlight/multi_intensity ] && exit 0; sleep 0.5; done; exit 1'
+ExecStart=/usr/local/bin/kbd-color --restore
+
+[Install]
+WantedBy=default.target
