@@ -1,0 +1,8 @@
+{
+  "uuid": "mechrevo-kbd@plutarxi99.github.io",
+  "name": "Keyboard Color (mechrevo-kbd)",
+  "description": "Quick Settings tile for the RGB keyboard backlight of MECHREVO / Uniwill laptops: colors and effects. Needs the mechrevo-kbd module and kbd-color.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "url": "https://github.com/Plutarxi99/mechrevo-kbd",
+  "version-name": "0.1.0"
+}

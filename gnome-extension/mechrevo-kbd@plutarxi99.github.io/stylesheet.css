@@ -1,0 +1,16 @@
+.mechrevo-kbd-swatches {
+  spacing: 6px;
+  padding: 4px 0;
+}
+
+.mechrevo-kbd-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+}
+
+.mechrevo-kbd-swatch:hover,
+.mechrevo-kbd-swatch:focus {
+  border-color: rgba(255, 255, 255, 0.8);
+}

@@ -11,6 +11,7 @@ systemctl --global disable kbd-color-restore.service 2> /dev/null || true
 rm -f /etc/systemd/user/kbd-color-restore.service /etc/systemd/user/mechrevo-kbd-effects.service
 rm -f "$PREFIX/bin/mechrevo-kbd-gui" "$PREFIX/bin/kbd-color" "$PREFIX/bin/mechrevo-kbd-effects" \
 	"$PREFIX/share/applications/io.github.plutarxi99.MechrevoKbd.desktop"
+rm -rf /usr/share/gnome-shell/extensions/mechrevo-kbd@plutarxi99.github.io
 rm -f /etc/udev/rules.d/90-mechrevo-kbd.rules /etc/modprobe.d/$NAME.conf /etc/modules-load.d/$NAME.conf
 udevadm control --reload
 

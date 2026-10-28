@@ -83,6 +83,11 @@ kbd-color effect static        # back to a plain color
 
 The app has a color wheel, presets, brightness and an effect picker with a live preview.
 
+**GNOME Quick Settings.** GNOME already shows its own *Keyboard* tile for brightness. The
+bundled extension adds a *Keyboard Color* tile next to it: presets, effects and a shortcut to the
+app. Enable it with `gnome-extensions enable mechrevo-kbd@plutarxi99.github.io` and log out and
+back in.
+
 **Effects.** *Rainbow* is drawn by the keyboard controller itself (experimental: it uses an
 EC bit that is documented but not yet confirmed on every model). *Breathing*, *blink* and
 *color cycle* are drawn by `mechrevo-kbd-effects`, a small user service (~20 updates per second)
@@ -172,6 +177,8 @@ sudo ./install.sh --force    # для других ноутбуков на ба�
 **Использование:** приложение «Подсветка клавиатуры» в меню (круг цвета, готовые цвета, яркость,
 эффекты) или `kbd-color red`, `kbd-color ff8800`, `kbd-color -b 0..4`,
 `kbd-color effect breathing 5` (`static`, `breathing`, `blink`, `cycle`, `rainbow`).
+В GNOME в быстрых настройках появляется плитка «Цвет клавиатуры» (расширение ставится вместе с
+проектом; включите его: `gnome-extensions enable mechrevo-kbd@plutarxi99.github.io` и перезайдите).
 Радугу рисует сам контроллер клавиатуры, остальные эффекты — фоновая служба
 `mechrevo-kbd-effects`. Последний цвет восстанавливается при входе в систему.
 

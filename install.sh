@@ -50,6 +50,14 @@ install -m 755 "$SRC/mechrevo-kbd-effects" "$PREFIX/bin/mechrevo-kbd-effects"
 install -Dm 644 "$SRC/data/io.github.plutarxi99.MechrevoKbd.desktop" \
 	"$PREFIX/share/applications/io.github.plutarxi99.MechrevoKbd.desktop"
 
+if command -v gnome-shell > /dev/null; then
+	step "GNOME Quick Settings extension"
+	ext=mechrevo-kbd@plutarxi99.github.io
+	rm -rf "/usr/share/gnome-shell/extensions/$ext"
+	cp -r "$SRC/gnome-extension/$ext" /usr/share/gnome-shell/extensions/
+	echo "    enable it in the Extensions app, or: gnome-extensions enable $ext (then log out and back in)"
+fi
+
 step "user services (color restore for everyone, effects on demand)"
 install -Dm 644 "$SRC/data/kbd-color-restore.service" /etc/systemd/user/kbd-color-restore.service
 install -Dm 644 "$SRC/data/mechrevo-kbd-effects.service" /etc/systemd/user/mechrevo-kbd-effects.service

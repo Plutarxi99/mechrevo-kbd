@@ -120,13 +120,16 @@ def main():
             mode, speed = read_effect()
             last = None
 
-        want_rainbow = mode == "rainbow" and os.path.exists(rainbow)
+        # Without the module's rainbow switch (or write access to it) draw it in software
+        hw_rainbow = os.access(rainbow, os.W_OK)
+        want_rainbow = mode == "rainbow" and hw_rainbow
         if want_rainbow != in_rainbow:
             write(rainbow, "1" if want_rainbow else "0")
             in_rainbow = want_rainbow
             last = None
 
-        color = frame(mode, speed, rgb, time.monotonic() - start)
+        drawn = "cycle" if mode == "rainbow" and not hw_rainbow else mode
+        color = frame(drawn, speed, rgb, time.monotonic() - start)
         if color is None:
             color = None if in_rainbow else rgb
         if color is not None:
@@ -135,7 +138,7 @@ def main():
                 write(intensity, "%d %d %d" % color)
                 last = color
 
-        time.sleep(1 / FPS if color is not None and mode != "static" else 0.5)
+        time.sleep(1 / FPS if color is not None and drawn != "static" else 0.5)
 
     # Leave the keyboard in the plain saved color
     if in_rainbow:
