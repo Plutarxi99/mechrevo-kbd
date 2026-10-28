@@ -68,7 +68,7 @@ make sign            # build and sign; run after every change
 - **Commits:** short imperative subject (`Add per-key …`, `Fix …`), body explains why.
 
 By contributing you agree that your code is released under the project's
-[GPL-2.0 license](LICENSE).
+[GPL-2.0 license](LICENSE), and to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 
@@ -92,4 +92,5 @@ MECHREVO или другой ноутбук на базе Uniwill, устано�
 пушит только он. Для крупных изменений сначала откройте issue, чтобы договориться о подходе.
 
 Сборка, подпись для Secure Boot и стиль кода описаны выше, в английской части.
-Участвуя в проекте, вы соглашаетесь, что ваш код распространяется под лицензией GPL-2.0.
+Участвуя в проекте, вы соглашаетесь, что ваш код распространяется под лицензией GPL-2.0,
+и соблюдаете [кодекс поведения](CODE_OF_CONDUCT.md): уважительное общение, без оскорблений и травли.
