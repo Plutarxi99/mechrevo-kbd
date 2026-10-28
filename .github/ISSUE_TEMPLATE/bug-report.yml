@@ -1,0 +1,40 @@
+name: Bug report / Ошибка
+description: Something does not work as described. Что-то работает не так, как описано.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? / Что произошло?
+      description: What you did, what you expected, what you got. Что делали, что ожидали, что получили.
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Part / Компонент
+      options:
+        - Kernel module / Модуль ядра
+        - install.sh / uninstall.sh
+        - GUI app / Приложение
+        - kbd-color
+        - Effects service / Служба эффектов
+        - Other / Другое
+    validations:
+      required: true
+  - type: textarea
+    id: info
+    attributes:
+      label: System info / Информация о системе
+      description: |
+        `cat /sys/class/dmi/id/{sys_vendor,product_name}; uname -r; cat /etc/os-release | head -2; sudo dmesg | grep mechrevo`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Логи
+      description: |
+        Errors from the terminal, or `journalctl --user -u mechrevo-kbd-effects -u kbd-color-restore -b`
+      render: text

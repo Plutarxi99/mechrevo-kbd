@@ -29,7 +29,7 @@ be changed from the Windows app. This project fills that gap.
 | Other MECHREVO | | should work, please report |
 | Other Uniwill-based laptops (single-zone RGB) | | try `--force`, please report |
 
-Please [report your laptop](https://github.com/Plutarxi99/mechrevo-kbd/issues/new?template=device-report.md),
+Please [report your laptop](https://github.com/Plutarxi99/mechrevo-kbd/issues/new?template=device-report.yml),
 whether it works or not.
 
 **Requirements:** a recent kernel (developed on Linux 7.0; CI builds against the Ubuntu 24.04
@@ -122,6 +122,12 @@ sudo ./uninstall.sh
 The DKMS signing key stays enrolled in MOK; remove it with `sudo mokutil --delete <key.der>` if
 you no longer need it.
 
+## Contributing
+
+Device reports, bug reports, ideas and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md). Questions go to
+[Discussions](https://github.com/Plutarxi99/mechrevo-kbd/discussions).
+
 ## Disclaimer
 
 This is an independent project, not affiliated with MECHREVO, Uniwill or TUXEDO. It talks to the
@@ -174,7 +180,11 @@ sudo ./install.sh --force    # для других ноутбуков на ба�
 **Удаление:** `sudo ./uninstall.sh`.
 
 Если у вас другой ноутбук MECHREVO или Uniwill, сообщите, работает ли всё,
-[через шаблон issue](https://github.com/Plutarxi99/mechrevo-kbd/issues/new?template=device-report.md).
+[через шаблон issue](https://github.com/Plutarxi99/mechrevo-kbd/issues/new?template=device-report.yml).
+
+Хотите помочь — отчёты о моделях, ошибки, идеи и pull request'ы приветствуются, подробности в
+[CONTRIBUTING.md](CONTRIBUTING.md#как-помочь-проекту). Вопросы — в
+[Discussions](https://github.com/Plutarxi99/mechrevo-kbd/discussions).
 
 Проект независимый и не связан с MECHREVO, Uniwill или TUXEDO. Модуль пишет только в регистры
 подсветки клавиатуры, но используете вы его на свой риск.
@@ -213,6 +223,6 @@ sudo ./install.sh --force    # 其他基于 Uniwill（模具）的笔记本
 
 **卸载：** `sudo ./uninstall.sh`
 
-欢迎通过 [Issue 模板](https://github.com/Plutarxi99/mechrevo-kbd/issues/new?template=device-report.md)
+欢迎通过 [Issue 模板](https://github.com/Plutarxi99/mechrevo-kbd/issues/new?template=device-report.yml)
 反馈您的机型是否可用。本项目为独立项目，与机械革命、Uniwill、TUXEDO 无关；模块只写入键盘背光相关的寄存器，
 使用风险自负。

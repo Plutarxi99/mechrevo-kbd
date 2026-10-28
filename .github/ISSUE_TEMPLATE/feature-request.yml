@@ -1,0 +1,21 @@
+name: Idea / Идея
+description: Suggest an improvement or a new feature. Предложить улучшение или новую возможность.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do? / Что хочется сделать?
+      description: The problem or use case, not only the solution. Опишите задачу, а не только решение.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work? / Как это могло бы работать?
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing / Участие
+      options:
+        - label: I'd like to implement this myself / Хочу сделать это сам(а)

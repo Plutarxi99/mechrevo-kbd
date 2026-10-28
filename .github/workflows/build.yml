@@ -14,6 +14,12 @@ jobs:
       - name: Build the module against the runner's kernel
         run: make KVER=$(uname -r)
       - run: modinfo ./mechrevo_kbd.ko
+      - name: Kernel coding style (checkpatch)
+        run: |
+          base=https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/scripts
+          curl -sfL "$base/checkpatch.pl?h=v7.0" -o checkpatch.pl
+          curl -sfL "$base/spelling.txt?h=v7.0" -o spelling.txt
+          perl checkpatch.pl -f --no-tree --strict mechrevo_kbd.c
 
   scripts:
     runs-on: ubuntu-24.04

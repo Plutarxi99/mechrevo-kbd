@@ -1,0 +1,46 @@
+name: Device report / Отчёт о модели
+description: Does mechrevo-kbd work on your laptop? Работает ли на вашем ноутбуке?
+title: "[device] "
+labels: [device-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Reports that it **does not** work are just as useful.
+        Спасибо! Отчёты «не работает» так же полезны, как «работает».
+  - type: input
+    id: model
+    attributes:
+      label: Laptop model / Модель ноутбука
+      placeholder: MECHREVO WUJIE15XA
+    validations:
+      required: true
+  - type: textarea
+    id: info
+    attributes:
+      label: System info / Информация о системе
+      description: |
+        Output of / Вывод команд:
+        `cat /sys/class/dmi/id/{sys_vendor,product_name,board_name}; uname -r; sudo dmesg | grep mechrevo`
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: works
+    attributes:
+      label: What works? / Что работает?
+      options:
+        - label: Module loads / Модуль загружается
+        - label: Color changes / Цвет меняется
+        - label: Brightness changes / Яркость меняется
+        - label: Hardware rainbow (`kbd-color effect rainbow`) / Аппаратная радуга
+        - label: Breathing, blink, color cycle / Дыхание, мигание, переливание
+  - type: dropdown
+    id: force
+    attributes:
+      label: Installed with --force? / Ставили с --force?
+      options: ["No / Нет", "Yes / Да"]
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else / Что-то ещё
